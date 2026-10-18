@@ -1,6 +1,10 @@
 # Kaburlu Chat — setup guide
 
-**How sign-up works:** a new user enters name, mobile number and email. A 6-digit code arrives by email (sent through Brevo), and after they type it in, their account is ready.
+**How it works**
+
+- **Register:** a new user enters name, mobile number, email and a password. A 6-digit code is emailed once (through Brevo) to confirm the email.
+- **Log in:** mobile number and password. No code is needed.
+- **Forgot password:** the user gets an email code, then sets a new password.
 
 **What it costs: ₹0.** Vercel hosts the website, Brevo sends the emails (free up to 300 a day), and Firebase stores the chats (free plan).
 
@@ -109,6 +113,8 @@ kaburlu/
 ```
 
 **Safety built in**
+
+- **Passwords:** stored only as scrypt hashes in a server-only part of the database. Five wrong passwords lock that account's login for 15 minutes.
 
 - **Codes:** each code expires in 10 minutes. After 5 wrong tries, the user needs a new code. Each email can get one code a minute and 10 a day.
 - **Chats:** only the two people in a chat can read it.

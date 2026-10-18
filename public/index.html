@@ -45,19 +45,31 @@
       <div class="field"><label for="r-name">Your name</label><input id="r-name" class="input" autocomplete="name" placeholder="e.g. Raghava K" maxlength="40"></div>
       <div class="field"><label for="r-phone">Mobile number</label><div class="phone"><span>+91</span><input id="r-phone" inputmode="numeric" autocomplete="tel-national" placeholder="98765 43210" maxlength="11"></div></div>
       <div class="field"><label for="r-email">Email</label><input id="r-email" class="input" type="email" autocomplete="email" placeholder="you@example.com" maxlength="80"></div>
+      <div class="field"><label for="r-pass">Create a password</label><input id="r-pass" class="input" type="password" autocomplete="new-password" placeholder="At least 8 characters" maxlength="72"></div>
       <p class="err" id="r-err"></p>
       <button class="btn" id="r-go" type="submit">Send code to my email</button>
     </form>
 
     <form id="f-login" class="stack" novalidate hidden>
-      <div class="field"><label for="l-id">Mobile number or email</label><input id="l-id" class="input" autocomplete="username" placeholder="98765 43210 or you@example.com" maxlength="80"></div>
+      <div class="field"><label for="l-phone">Mobile number</label><div class="phone"><span>+91</span><input id="l-phone" inputmode="numeric" autocomplete="username" placeholder="98765 43210" maxlength="11"></div></div>
+      <div class="field"><label for="l-pass">Password</label><input id="l-pass" class="input" type="password" autocomplete="current-password" placeholder="Your password" maxlength="72"></div>
       <p class="err" id="l-err"></p>
-      <button class="btn" id="l-go" type="submit">Send code to my email</button>
+      <button class="btn" id="l-go" type="submit">Log in</button>
+      <p class="fine"><button type="button" class="linkbtn" id="l-forgot">Forgot password?</button></p>
+    </form>
+
+    <form id="f-forgot" class="stack" novalidate hidden>
+      <p class="fine" style="text-align:left;font-size:14px">Enter your mobile number or email. We'll email you a code to set a new password.</p>
+      <div class="field"><label for="f-id">Mobile number or email</label><input id="f-id" class="input" autocomplete="username" placeholder="98765 43210 or you@example.com" maxlength="80"></div>
+      <p class="err" id="f-err"></p>
+      <button class="btn" id="f-go" type="submit">Send code to my email</button>
+      <p class="fine"><button type="button" class="linkbtn" id="f-back">Back to log in</button></p>
     </form>
 
     <form id="f-otp" class="stack" novalidate hidden>
       <p class="fine" id="o-to" style="text-align:left;font-size:14px"></p>
       <div class="field"><label for="o-code">Enter the 6-digit code</label><input id="o-code" class="input otp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="••••••"></div>
+      <div class="field" id="o-pass-wrap" hidden><label for="o-pass">New password</label><input id="o-pass" class="input" type="password" autocomplete="new-password" placeholder="At least 8 characters" maxlength="72"></div>
       <p class="err" id="o-err"></p>
       <button class="btn" id="o-go" type="submit">Verify</button>
       <p class="fine"><button type="button" class="linkbtn" id="o-resend">Resend code</button> · <button type="button" class="linkbtn" id="o-back">Go back</button></p>

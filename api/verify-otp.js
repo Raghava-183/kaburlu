@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { FieldValue } from "firebase-admin/firestore";
-import { admin, hmac, send, readBody } from "./_lib.js";
+import { admin, hmac, send, readBody, validPassword, hashPassword } from "./_lib.js";
 
 const MAX_ATTEMPTS = 5;
 
@@ -14,10 +14,11 @@ export default async function handler(req, res) {
   const { auth, db } = admin();
   try {
     const ref = db.doc(`otps/${ticket}`);
-    const snap = await ref.get();
-    const o = snap.data();
+    const o = (await ref.get()).data();
     if (!o || !o.codeHash || Date.now() > o.expiresAt) return send(res, 400, { error: "This code has expired. Tap Resend code." });
     if (o.attempts >= MAX_ATTEMPTS) return send(res, 429, { error: "Too many wrong tries. Tap Resend code." });
+    // Check the new password before using up the code.
+    if (o.mode === "reset" && !validPassword(body.newPassword)) return send(res, 400, { error: "New password must be at least 8 characters." });
 
     const good = crypto.timingSafeEqual(Buffer.from(hmac(ticket + ":" + code)), Buffer.from(o.codeHash));
     if (!good) {
@@ -25,8 +26,8 @@ export default async function handler(req, res) {
       const left = MAX_ATTEMPTS - o.attempts - 1;
       return send(res, 400, { error: left > 0 ? `That code doesn't match. ${left} tries left.` : "Too many wrong tries. Tap Resend code." });
     }
-    // Code used: keep cooldown info, remove the code.
-    await ref.update({ codeHash: FieldValue.delete() });
+    // Code used: keep cooldown info, remove the code and any stored password hash.
+    await ref.update({ codeHash: FieldValue.delete(), passHash: FieldValue.delete() });
 
     let uid = o.uid;
     if (o.mode === "register") {
@@ -37,12 +38,15 @@ export default async function handler(req, res) {
         b.create(db.doc(`phoneIndex/${o.phone}`), { uid });
         b.set(db.doc(`users/${uid}`), { name: o.name, phone: o.phone, createdAt: FieldValue.serverTimestamp() });
         b.set(db.doc(`users/${uid}/private/settings`), { email: o.email, pinHash: null, salt: null, hidden: [] });
+        b.set(db.doc(`secrets/${uid}`), { passHash: o.passHash, fails: 0, lockUntil: 0 });
         await b.commit();
       } catch (e) {
         await auth.deleteUser(uid).catch(() => {});
         if (e.code === 6 || /already exists/i.test(e.message)) return send(res, 409, { error: "This mobile number was just registered by someone else." });
         throw e;
       }
+    } else if (o.mode === "reset") {
+      await db.doc(`secrets/${uid}`).set({ passHash: await hashPassword(body.newPassword), fails: 0, lockUntil: 0 });
     }
     if (!uid) return send(res, 400, { error: "Account not found. Register first." });
     const token = await auth.createCustomToken(uid);

@@ -77,15 +77,21 @@ async function api(path, body) {
 
 /* ================= AUTH UI ================= */
 let pending = null; // { body, ticket }
+const FORMS = ["f-reg", "f-login", "f-forgot", "f-otp"];
 function showForm(id) {
-  for (const f of ["f-reg", "f-login", "f-otp"]) $("#" + f).hidden = f !== id;
+  for (const f of FORMS) $("#" + f).hidden = f !== id;
   $("#tab-reg").setAttribute("aria-selected", id === "f-reg");
-  $("#tab-login").setAttribute("aria-selected", id === "f-login");
+  $("#tab-login").setAttribute("aria-selected", id === "f-login" || id === "f-forgot");
   $(".seg").hidden = id === "f-otp";
 }
 $("#tab-reg").onclick = () => showForm("f-reg");
 $("#tab-login").onclick = () => showForm("f-login");
-$("#r-phone").addEventListener("input", e => {
+$("#l-forgot").onclick = () => {
+  const d = digits($("#l-phone").value); if (d) $("#f-id").value = d;
+  showForm("f-forgot"); setTimeout(() => $("#f-id").focus(), 50);
+};
+$("#f-back").onclick = () => showForm("f-login");
+for (const id of ["#r-phone", "#l-phone"]) $(id).addEventListener("input", e => {
   const d = digits(e.target.value).slice(0, 10);
   e.target.value = d.length > 5 ? d.slice(0, 5) + " " + d.slice(5) : d;
 });
@@ -96,7 +102,10 @@ async function requestCode(body, btn, errEl) {
   try {
     const d = await api("send-otp", body);
     pending = { body, ticket: d.ticket };
+    const reset = body.mode === "reset";
     $("#o-to").innerHTML = `We emailed a 6-digit code to <b>${esc(d.to)}</b>. Check your inbox and spam folder.`;
+    $("#o-pass-wrap").hidden = !reset; $("#o-pass").value = "";
+    $("#o-go").textContent = reset ? "Set new password" : "Verify and create account";
     $("#o-code").value = ""; $("#o-err").textContent = "";
     showForm("f-otp"); setTimeout(() => $("#o-code").focus(), 50);
   } catch (ex) { errEl.textContent = ex.message; }
@@ -108,38 +117,59 @@ $("#f-reg").addEventListener("submit", (e) => {
   const name = $("#r-name").value.trim().replace(/\s+/g, " ");
   const phone = digits($("#r-phone").value);
   const email = $("#r-email").value.trim().toLowerCase();
+  const password = $("#r-pass").value;
   if (name.length < 2) { err.textContent = "Enter your name (at least 2 letters)."; return; }
   if (!validMobile(phone)) { err.textContent = "Enter a 10-digit mobile number starting with 6, 7, 8 or 9."; return; }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { err.textContent = "Enter a valid email address."; return; }
-  requestCode({ mode: "register", name, phone, email }, $("#r-go"), err);
+  if (password.length < 8) { err.textContent = "Password must be at least 8 characters."; return; }
+  requestCode({ mode: "register", name, phone, email, password }, $("#r-go"), err);
 });
-$("#f-login").addEventListener("submit", (e) => {
-  e.preventDefault(); const err = $("#l-err");
-  const id = $("#l-id").value.trim();
+
+$("#f-login").addEventListener("submit", async (e) => {
+  e.preventDefault(); const err = $("#l-err"); err.textContent = "";
+  const phone = digits($("#l-phone").value);
+  const password = $("#l-pass").value;
+  if (!validMobile(phone)) { err.textContent = "Enter your 10-digit mobile number."; return; }
+  if (!password) { err.textContent = "Enter your password."; return; }
+  const btn = $("#l-go"); btn.disabled = true; btn.textContent = "Logging in…";
+  try {
+    const d = await api("login", { phone, password });
+    await signInWithCustomToken(auth, d.token);
+    $("#l-pass").value = "";
+  } catch (ex) { err.textContent = ex.message; }
+  finally { btn.disabled = false; btn.textContent = "Log in"; }
+});
+
+$("#f-forgot").addEventListener("submit", (e) => {
+  e.preventDefault(); const err = $("#f-err");
+  const id = $("#f-id").value.trim();
   if (!id) { err.textContent = "Enter your mobile number or email."; return; }
-  requestCode({ mode: "login", id }, $("#l-go"), err);
+  requestCode({ mode: "reset", id }, $("#f-go"), err);
 });
-$("#o-back").onclick = () => showForm(pending?.body.mode === "login" ? "f-login" : "f-reg");
+
+$("#o-back").onclick = () => showForm(pending?.body.mode === "reset" ? "f-forgot" : "f-reg");
 $("#o-resend").onclick = () => { if (pending) requestCode(pending.body, $("#o-resend"), $("#o-err")); };
 
 $("#f-otp").addEventListener("submit", async (e) => {
   e.preventDefault(); const err = $("#o-err"); err.textContent = "";
   const code = $("#o-code").value;
+  const reset = pending?.body.mode === "reset";
+  const newPassword = $("#o-pass").value;
   if (code.length !== 6) { err.textContent = "Enter all 6 digits."; return; }
-  const btn = $("#o-go"); btn.disabled = true; btn.textContent = "Verifying…";
+  if (reset && newPassword.length < 8) { err.textContent = "New password must be at least 8 characters."; return; }
+  const btn = $("#o-go"); const label = btn.textContent; btn.disabled = true; btn.textContent = "Verifying…";
   try {
-    const d = await api("verify-otp", { ticket: pending.ticket, code });
-    const isNew = pending.body.mode === "register";
+    const d = await api("verify-otp", { ticket: pending.ticket, code, ...(reset ? { newPassword } : {}) });
     await signInWithCustomToken(auth, d.token); // onAuthStateChanged takes over
     pending = null;
-    toast(isNew ? "Account created. Welcome to Kaburlu!" : "Logged in");
+    toast(reset ? "Password changed. You're logged in." : "Account created. Welcome to Kaburlu!");
   } catch (ex) { err.textContent = ex.message; }
-  finally { btn.disabled = false; btn.textContent = "Verify"; }
+  finally { btn.disabled = false; btn.textContent = label; }
 });
 
 onAuthStateChanged(auth, async (u) => {
   stopApp();
-  if (!u) { setScreen("auth"); return; }
+  if (!u) { setScreen("auth"); if ($("#f-otp").hidden && $("#f-forgot").hidden) showForm("f-login"); return; }
   setScreen("loading");
   try {
     const p = await getDoc(doc(db, "users", u.uid));
@@ -574,7 +604,7 @@ function forgotPin() {
     err.textContent = ""; btn.disabled = true;
     try {
       if (!ticket) {
-        ticket = (await api("send-otp", { mode: "login", id: email })).ticket;
+        ticket = (await api("send-otp", { mode: "pin", id: email })).ticket;
         code.hidden = false; code.focus(); btn.textContent = "Verify";
       } else {
         await api("verify-otp", { ticket, code: code.value });

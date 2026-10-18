@@ -27,7 +27,8 @@ service cloud.firestore {
       allow get: if signedIn();
     }
 
-    // Email codes (otps/...) are server-only: no rule here means browsers can't touch them.
+    // Email codes (otps/...) and password hashes (secrets/...) are server-only:
+    // no rule here means browsers can't read or write them.
 
     // One document per 1-to-1 chat. Id is the two uids, sorted, joined by "_".
     match /chats/{chatId} {

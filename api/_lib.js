@@ -1,3 +1,4 @@
+import { promisify } from "node:util";
 import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
@@ -49,4 +50,41 @@ export async function sendEmail(to, name, code) {
     })
   });
   if (!r.ok) throw new Error("brevo " + r.status + " " + (await r.text()));
+}
+
+/* ---------- passwords (scrypt, stored server-only in secrets/{uid}) ---------- */
+const scryptAsync = promisify(crypto.scrypt);
+export const validPassword = (p) => typeof p === "string" && p.length >= 8 && p.length <= 72;
+export async function hashPassword(pw) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const h = (await scryptAsync(pw, salt, 64)).toString("hex");
+  return `scrypt$${salt}$${h}`;
+}
+export async function checkPassword(pw, stored) {
+  const [, salt, h] = String(stored || "").split("$");
+  if (!salt || !h) return false;
+  const c = await scryptAsync(pw, salt, 64);
+  return crypto.timingSafeEqual(c, Buffer.from(h, "hex"));
+}
+
+/* Find an existing account by 10-digit mobile number or email. Returns {uid, email, name} or null. */
+export async function findAccount(auth, db, raw) {
+  const id = String(raw || "").trim().toLowerCase();
+  const digits = id.replace(/\D/g, "").slice(-10);
+  try {
+    if (!id.includes("@") && validMobile(digits)) {
+      const idx = await db.doc(`phoneIndex/+91${digits}`).get();
+      if (!idx.exists) return null;
+      const u = await auth.getUser(idx.data().uid);
+      return { uid: u.uid, email: u.email, name: u.displayName || "" };
+    }
+    if (validEmail(id)) {
+      const u = await auth.getUserByEmail(id);
+      return { uid: u.uid, email: u.email, name: u.displayName || "" };
+    }
+  } catch (e) {
+    if (e.code === "auth/user-not-found") return null;
+    throw e;
+  }
+  return undefined; // input was neither a phone number nor an email
 }

@@ -1,17 +1,24 @@
 import crypto from "node:crypto";
-import { admin, sha, hmac, validEmail, validMobile, maskEmail, send, readBody, sendEmail } from "./_lib.js";
+import {
+  admin, sha, hmac, validEmail, validMobile, validPassword, hashPassword, findAccount,
+  maskEmail, send, readBody, sendEmail
+} from "./_lib.js";
 
 const COOLDOWN_MS = 60 * 1000;
 const EXPIRY_MS = 10 * 60 * 1000;
 const DAILY_LIMIT = 10;
 
+// Modes:
+//   register — new account: name, phone, email, password. Code confirms the email.
+//   reset    — forgot password: id = mobile number or email.
+//   pin      — forgot PIN inside the app: id = the user's email.
 export default async function handler(req, res) {
   if (req.method !== "POST") return send(res, 405, { error: "Use POST." });
   const body = readBody(req);
   const { auth, db } = admin();
-
-  let email, name = "", phone = "", uid = null;
   const mode = body.mode;
+
+  let email, name = "", phone = "", uid = null, passHash = null;
 
   try {
     if (mode === "register") {
@@ -21,28 +28,17 @@ export default async function handler(req, res) {
       if (name.length < 2 || name.length > 40) return send(res, 400, { error: "Enter your name (2 to 40 letters)." });
       if (!validMobile(digits)) return send(res, 400, { error: "Enter a 10-digit mobile number starting with 6, 7, 8 or 9." });
       if (!validEmail(email)) return send(res, 400, { error: "Enter a valid email address." });
+      if (!validPassword(body.password)) return send(res, 400, { error: "Password must be at least 8 characters." });
       phone = "+91" + digits;
       if ((await db.doc(`phoneIndex/${phone}`).get()).exists) return send(res, 409, { error: "This mobile number is already registered. Use Log in." });
       try { await auth.getUserByEmail(email); return send(res, 409, { error: "This email is already registered. Use Log in." }); }
       catch (e) { if (e.code !== "auth/user-not-found") throw e; }
-    } else if (mode === "login") {
-      const id = String(body.id || "").trim().toLowerCase();
-      const digits = id.replace(/\D/g, "").slice(-10);
-      try {
-        if (!id.includes("@") && validMobile(digits)) {
-          const idx = await db.doc(`phoneIndex/+91${digits}`).get();
-          if (!idx.exists) return send(res, 404, { error: "No account with this number. Register first." });
-          uid = idx.data().uid;
-          const u = await auth.getUser(uid); email = u.email; name = u.displayName || "";
-        } else if (validEmail(id)) {
-          const u = await auth.getUserByEmail(id); uid = u.uid; email = u.email; name = u.displayName || "";
-        } else {
-          return send(res, 400, { error: "Enter your 10-digit mobile number or your email." });
-        }
-      } catch (e) {
-        if (e.code === "auth/user-not-found") return send(res, 404, { error: "No account found. Register first." });
-        throw e;
-      }
+      passHash = await hashPassword(body.password);
+    } else if (mode === "reset" || mode === "pin") {
+      const acc = await findAccount(auth, db, body.id);
+      if (acc === undefined) return send(res, 400, { error: "Enter your 10-digit mobile number or your email." });
+      if (acc === null) return send(res, 404, { error: "No account found. Register first." });
+      ({ uid, email, name } = acc);
     } else {
       return send(res, 400, { error: "Unknown request." });
     }
@@ -60,7 +56,7 @@ export default async function handler(req, res) {
 
     const code = String(crypto.randomInt(100000, 1000000));
     await ref.set({
-      email, mode, name, phone, uid, codeHash: hmac(ticket + ":" + code),
+      email, mode, name, phone, uid, passHash, codeHash: hmac(ticket + ":" + code),
       expiresAt: now + EXPIRY_MS, attempts: 0, sentAt: now, day: today, dayCount: dayCount + 1
     });
     await sendEmail(email, name, code);
