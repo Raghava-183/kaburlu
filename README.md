@@ -112,6 +112,15 @@ kaburlu/
 └── package.json
 ```
 
+**Install as an app**
+
+- **Android (Chrome):** an **Install** banner appears in the chat list. Tap it, and Kaburlu gets its own icon on the home screen and opens full-screen.
+- **iPhone:** tap Install to see the steps (Safari → Share → Add to Home Screen).
+
+**Rename contacts**
+
+Tap ⋮ on a chat (or the pencil in the chat header) and choose **Rename**. Only you see the new name. Choose **Use their name** to go back.
+
 **Safety built in**
 
 - **Passwords:** stored only as scrypt hashes in a server-only part of the database. Five wrong passwords lock that account's login for 15 minutes.

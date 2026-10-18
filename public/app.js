@@ -62,6 +62,8 @@ const S = {
   unsubs: [], unsubMsgs: null, unsubOpenChat: null
 };
 const hiddenSet = () => new Set(S.settings.hidden || []);
+// Name to show for a contact: your own nickname for them, or the name they registered with.
+const nameOf = (p) => (p && S.settings.nicknames?.[p.id]) || p?.name || "…";
 const setScreen = (id) => { for (const s of ["loading", "auth", "app"]) $("#" + s).hidden = s !== id; };
 
 /* ================= server calls (Vercel functions) ================= */
@@ -230,7 +232,7 @@ function renderList() {
   if (!S.user) return;
   const me = S.user.uid; const hid = hiddenSet();
   const q = S.q.trim().toLowerCase(); const qd = digits(q);
-  const match = (p) => !q || (p.name || "").toLowerCase().includes(q) || (qd.length >= 3 && (p.phone || "").includes(qd));
+  const match = (p) => !q || (p.name || "").toLowerCase().includes(q) || nameOf(p).toLowerCase().includes(q) || (qd.length >= 3 && (p.phone || "").includes(qd));
   $("#vault-head").hidden = !S.vault;
   $("#newchat").hidden = S.vault;
   let html = "";
@@ -266,7 +268,7 @@ function rowHtml(cid, chat, inVault) {
   return `<div class="row ${S.open === cid ? "active" : ""} ${unread ? "unread" : ""}" data-cid="${esc(cid)}" tabindex="0" role="button">
     ${avatar(o)}
     <div class="meta">
-      <div class="l1"><span class="name">${esc(o.name)}</span>${chat?.lastAt ? `<span class="time">${esc(listTime(ms(chat.lastAt)))}</span>` : ""}</div>
+      <div class="l1"><span class="name">${esc(nameOf(o))}</span>${chat?.lastAt ? `<span class="time">${esc(listTime(ms(chat.lastAt)))}</span>` : ""}</div>
       <div class="l2"><span class="preview">${esc(preview)}</span>${unread ? `<span class="dot"></span>` : ""}</div>
     </div>
     <button class="more" data-menu="${esc(cid)}" data-vault="${inVault ? 1 : 0}" aria-label="Chat options" aria-expanded="false"><svg class="icon"><use href="#i-more"/></svg></button>
@@ -299,14 +301,18 @@ function closeMenu() { document.querySelector(".menu")?.remove(); document.query
 function openMenu(anchor, cid, inVault) {
   closeMenu(); anchor.setAttribute("aria-expanded", "true");
   const m = document.createElement("div"); m.className = "menu";
-  m.innerHTML = inVault
+  m.innerHTML = `<button data-act="rename"><svg class="icon"><use href="#i-pencil"/></svg>Rename</button>` + (inVault
     ? `<button data-act="unhide"><svg class="icon"><use href="#i-eye"/></svg>Unhide chat</button>`
-    : `<button data-act="hide"><svg class="icon"><use href="#i-eyeoff"/></svg>Hide chat</button>`;
+    : `<button data-act="hide"><svg class="icon"><use href="#i-eyeoff"/></svg>Hide chat</button>`);
   document.body.appendChild(m);
   const r = anchor.getBoundingClientRect();
   m.style.top = Math.min(r.bottom + 4, innerHeight - m.offsetHeight - 8) + "px";
   m.style.left = Math.max(8, Math.min(r.right - m.offsetWidth, innerWidth - m.offsetWidth - 8)) + "px";
-  m.onclick = (e) => { const b = e.target.closest("button"); if (!b) return; closeMenu(); b.dataset.act === "hide" ? hideChat(cid) : unhideChat(cid); };
+  m.onclick = (e) => { const b = e.target.closest("button"); if (!b) return; closeMenu();
+    const act = b.dataset.act;
+    if (act === "rename") renameContact(otherOf(cid, S.user.uid));
+    else if (act === "hide") hideChat(cid); else unhideChat(cid);
+  };
   m.querySelector("button").focus();
 }
 document.addEventListener("click", (e) => { if (!e.target.closest(".menu")) closeMenu(); });
@@ -353,7 +359,7 @@ async function markRead() {
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) markRead(); });
 
-const convWho = (o, hidden) => `<b>${esc(o.name)}${hidden ? `<span class="chip"><svg class="icon"><use href="#i-lock"/></svg>Hidden</span>` : ""}</b><span class="mono">${esc(fmtPhone(o.phone))}</span>`;
+const convWho = (o, hidden) => `<b>${esc(nameOf(o))}${hidden ? `<span class="chip"><svg class="icon"><use href="#i-lock"/></svg>Hidden</span>` : ""}</b><span class="mono">${esc(fmtPhone(o.phone))}${S.settings.nicknames?.[o.id] ? ` · ${esc(o.name)}` : ""}</span>`;
 const hideBtn = (hidden) => `<button class="iconbtn" id="b-hide" title="${hidden ? "Unhide chat" : "Hide chat"}" aria-label="${hidden ? "Unhide chat" : "Hide chat"}"><svg class="icon"><use href="#i-${hidden ? "eye" : "eyeoff"}"/></svg></button>`;
 const grow = (ta) => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px"; };
 
@@ -384,6 +390,7 @@ function renderMain(full) {
       <button class="iconbtn back" id="b-back" aria-label="Back to chats"><svg class="icon"><use href="#i-back"/></svg></button>
       ${avatar(o, "sm")}
       <div class="who">${convWho(o, isHidden)}</div>
+      <button class="iconbtn" id="b-rename" title="Rename" aria-label="Rename contact"><svg class="icon"><use href="#i-pencil"/></svg></button>
       ${hideBtn(isHidden)}
     </div>
     <div class="msgs" id="msgs" aria-live="polite"></div>
@@ -403,6 +410,7 @@ function renderMain(full) {
 }
 $("#main").addEventListener("click", (e) => {
   if (e.target.closest("#b-hide")) hiddenSet().has(S.open) ? unhideChat(S.open) : hideChat(S.open);
+  if (e.target.closest("#b-rename")) renameContact(otherOf(S.open, S.user.uid));
 });
 
 function renderMsgs() {
@@ -411,7 +419,7 @@ function renderMsgs() {
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
   if (!S.msgs.length) {
     const o = S.people.get(otherOf(S.open, me));
-    box.innerHTML = `<div class="empty" style="margin:auto"><div class="bubble-ill"><svg class="icon" style="width:28px;height:28px"><use href="#i-msg"/></svg></div>No messages yet.<br>Say namaste to ${esc(o?.name?.split(" ")[0] || "them")}.</div>`;
+    box.innerHTML = `<div class="empty" style="margin:auto"><div class="bubble-ill"><svg class="icon" style="width:28px;height:28px"><use href="#i-msg"/></svg></div>No messages yet.<br>Say namaste to ${esc(nameOf(o).split(" ")[0] || "them")}.</div>`;
     return;
   }
   let html = "", lastDay = "", lastFrom = "", lastTs = 0;
@@ -614,3 +622,75 @@ function forgotPin() {
     finally { btn.disabled = false; }
   };
 }
+
+/* ================= RENAME CONTACTS ================= */
+// Nicknames are private: saved in your own settings, only you see them.
+function renameContact(uid) {
+  const p = S.people.get(uid) || { id: uid, name: "", phone: "" };
+  const current = S.settings.nicknames?.[uid] || "";
+  const sc = modal(`<div class="lockic"><svg class="icon"><use href="#i-pencil"/></svg></div>
+    <h3>Rename contact</h3>
+    <p class="sub">Only you see this name. They registered as <b>${esc(p.name)}</b>${p.phone ? ` · <span class="mono">${esc(fmtPhone(p.phone))}</span>` : ""}.</p>
+    <input id="rn-name" class="input" maxlength="40" placeholder="${esc(p.name)}" value="${esc(current)}" autocomplete="off">
+    <p class="err" id="rn-err"></p>
+    <div class="row-btns">${current ? `<button class="btn ghost" id="rn-reset">Use their name</button>` : `<button class="btn ghost" data-close>Cancel</button>`}<button class="btn" id="rn-save">Save</button></div>`);
+  const input = sc.querySelector("#rn-name");
+  const save = async (value) => {
+    const nick = value.trim().replace(/\s+/g, " ").slice(0, 40);
+    const nicknames = { ...(S.settings.nicknames || {}) };
+    if (nick && nick !== p.name) nicknames[uid] = nick; else delete nicknames[uid];
+    // updateDoc replaces the whole nicknames map, so a removed nickname is really removed.
+    let ok = false;
+    try { await updateDoc(settingsRef(), { nicknames }); ok = true; } catch (ex) { console.error(ex); toast("Couldn't save. Try again."); }
+    if (ok) {
+      S.settings = { ...S.settings, nicknames };
+      sc.remove(); renderList(); renderMain(false);
+      toast(nicknames[uid] ? `Renamed to ${nicknames[uid]}` : `Showing ${p.name} again`);
+    }
+  };
+  sc.querySelector("#rn-save").onclick = () => save(input.value);
+  sc.querySelector("#rn-reset")?.addEventListener("click", () => save(""));
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") save(input.value); });
+  input.focus(); input.select();
+}
+
+/* ================= INSTALL AS APP ================= */
+if ("serviceWorker" in navigator) {
+  addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+}
+const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+let installEvent = null;
+
+function updateInstallUI() {
+  const can = !isStandalone() && (installEvent || isIOS);
+  const dismissed = ls.get("installDismissed", 0) > Date.now();
+  $("#install-bar").hidden = !can || dismissed;
+  $("#auth-install").hidden = !can;
+}
+addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installEvent = e; updateInstallUI(); });
+addEventListener("appinstalled", () => { installEvent = null; updateInstallUI(); toast("Kaburlu is on your home screen"); });
+
+async function doInstall() {
+  if (installEvent) {
+    installEvent.prompt();
+    const { outcome } = await installEvent.userChoice;
+    if (outcome === "accepted") installEvent = null;
+    updateInstallUI();
+    return;
+  }
+  if (isIOS) {
+    modal(`<div class="lockic"><svg class="icon"><use href="#i-install"/></svg></div>
+      <h3>Add Kaburlu to your home screen</h3>
+      <ol class="steps">
+        <li><span>Open this page in <b>Safari</b>.</span></li>
+        <li><span>Tap the <b>Share</b> button (square with an arrow) at the bottom.</span></li>
+        <li><span>Scroll down and tap <b>Add to Home Screen</b>, then <b>Add</b>.</span></li>
+      </ol>
+      <button class="btn" data-close>Got it</button>`);
+  }
+}
+$("#b-install").onclick = doInstall;
+$("#b-install-auth").onclick = doInstall;
+$("#b-install-x").onclick = () => { ls.set("installDismissed", Date.now() + 7 * 864e5); updateInstallUI(); };
+updateInstallUI();
