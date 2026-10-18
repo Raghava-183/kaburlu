@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isMe(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // Accounts are created by the server (api/verify-otp.js) after the email code is checked.
+    // Public profile: name + phone. Readable one at a time by signed-in users (no listing).
+    match /users/{uid} {
+      allow get: if signedIn();
+      allow update: if isMe(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 40;
+
+      // Private settings: email, PIN hash, hidden chat list. Only the owner can read or change it,
+      // and the email can't be changed from the browser.
+      match /private/{docId} {
+        allow read: if isMe(uid);
+        allow update: if isMe(uid) && request.resource.data.email == resource.data.email;
+      }
+    }
+
+    // Phone number -> uid lookup, used to start a chat by number. Written only by the server.
+    match /phoneIndex/{phone} {
+      allow get: if signedIn();
+    }
+
+    // Email codes (otps/...) are server-only: no rule here means browsers can't touch them.
+
+    // One document per 1-to-1 chat. Id is the two uids, sorted, joined by "_".
+    match /chats/{chatId} {
+      function members() { return request.resource.data.members; }
+
+      allow read: if signedIn() && request.auth.uid in resource.data.members;
+
+      allow create: if signedIn()
+        && members() is list && members().size() == 2
+        && request.auth.uid in members()
+        && members()[0] < members()[1]
+        && chatId == members()[0] + '_' + members()[1]
+        && request.resource.data.lastFrom == request.auth.uid;
+
+      allow update: if signedIn()
+        && request.auth.uid in resource.data.members
+        && members() == resource.data.members
+        && (request.resource.data.lastFrom == request.auth.uid
+            || request.resource.data.lastFrom == resource.data.lastFrom);
+
+      match /messages/{msgId} {
+        allow read: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+
+        allow create: if signedIn()
+          && request.auth.uid in getAfter(/databases/$(database)/documents/chats/$(chatId)).data.members
+          && request.resource.data.keys().hasOnly(['from', 'text', 'createdAt'])
+          && request.resource.data.from == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 2000
+          && request.resource.data.createdAt == request.time;
+
+        allow update, delete: if false;
+      }
+    }
+  }
+}

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Kaburlu Chat</title>
+<meta name="description" content="Chat with your people. Hide what's private.">
+<meta name="theme-color" content="#0E7C66">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.7" r="1.2"/></symbol>
+  <symbol id="i-unlock" viewBox="0 0 24 24"><rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 7.6-1.7"/></symbol>
+  <symbol id="i-eyeoff" viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c5 0 9 4.5 10 7-.4 1-1.3 2.4-2.6 3.7M6.6 6.6C4.4 8 2.8 10.2 2 12c1 2.5 5 7 10 7 1.8 0 3.4-.6 4.8-1.4"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12c1-2.5 5-7 10-7s9 4.5 10 7c-1 2.5-5 7-10 7s-9-4.5-10-7z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2.5-6.5z"/><path d="M11.5 13.5L20 4"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="19" r="1.4" fill="currentColor"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></symbol>
+  <symbol id="i-out" viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 16l-4-4 4-4M6 12h10"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.8 7L4 20l1.1-4.6A8 8 0 1 1 21 12z"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+</svg>
+
+<div id="loading" style="height:100%;display:grid"><div class="spinner"></div></div>
+
+<div id="auth" hidden>
+  <div class="auth-card">
+    <div class="brand">
+      <div class="mark">క</div>
+      <div><h1>Kaburlu</h1><p>Chat with your people. Hide what's private.</p></div>
+    </div>
+
+    <div class="seg" role="tablist">
+      <button id="tab-reg" type="button" role="tab" aria-selected="true">Register</button>
+      <button id="tab-login" type="button" role="tab" aria-selected="false">Log in</button>
+    </div>
+
+    <form id="f-reg" class="stack" novalidate>
+      <div class="field"><label for="r-name">Your name</label><input id="r-name" class="input" autocomplete="name" placeholder="e.g. Raghava K" maxlength="40"></div>
+      <div class="field"><label for="r-phone">Mobile number</label><div class="phone"><span>+91</span><input id="r-phone" inputmode="numeric" autocomplete="tel-national" placeholder="98765 43210" maxlength="11"></div></div>
+      <div class="field"><label for="r-email">Email</label><input id="r-email" class="input" type="email" autocomplete="email" placeholder="you@example.com" maxlength="80"></div>
+      <p class="err" id="r-err"></p>
+      <button class="btn" id="r-go" type="submit">Send code to my email</button>
+    </form>
+
+    <form id="f-login" class="stack" novalidate hidden>
+      <div class="field"><label for="l-id">Mobile number or email</label><input id="l-id" class="input" autocomplete="username" placeholder="98765 43210 or you@example.com" maxlength="80"></div>
+      <p class="err" id="l-err"></p>
+      <button class="btn" id="l-go" type="submit">Send code to my email</button>
+    </form>
+
+    <form id="f-otp" class="stack" novalidate hidden>
+      <p class="fine" id="o-to" style="text-align:left;font-size:14px"></p>
+      <div class="field"><label for="o-code">Enter the 6-digit code</label><input id="o-code" class="input otp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="••••••"></div>
+      <p class="err" id="o-err"></p>
+      <button class="btn" id="o-go" type="submit">Verify</button>
+      <p class="fine"><button type="button" class="linkbtn" id="o-resend">Resend code</button> · <button type="button" class="linkbtn" id="o-back">Go back</button></p>
+    </form>
+  </div>
+</div>
+
+<div id="app" hidden>
+  <div class="window">
+    <aside class="side">
+      <div class="side-top">
+        <div id="me-av"></div>
+        <div class="who"><b id="me-name"></b><span id="me-phone" class="mono"></span></div>
+        <button class="iconbtn vault" id="b-vault" title="Hidden chats" aria-label="Hidden chats"><svg class="icon"><use href="#i-lock"/></svg></button>
+        <button class="iconbtn" id="b-settings" title="PIN settings" aria-label="PIN settings"><svg class="icon"><use href="#i-gear"/></svg></button>
+        <button class="iconbtn" id="b-logout" title="Log out" aria-label="Log out"><svg class="icon"><use href="#i-out"/></svg></button>
+      </div>
+      <div class="vault-head" id="vault-head" hidden>
+        <svg class="icon" style="color:var(--accent)"><use href="#i-unlock"/></svg>
+        <div><b>Hidden chats</b><span>Unlocked. Locks when you leave.</span></div>
+        <button class="btn ghost" id="b-leave" style="padding:8px 12px">Lock</button>
+      </div>
+      <form class="newchat" id="newchat" novalidate>
+        <label class="search"><svg class="icon"><use href="#i-search"/></svg><input id="search" inputmode="search" placeholder="Search chats or enter a number" autocomplete="off"></label>
+      </form>
+      <div class="list" id="list"></div>
+      <div class="side-foot"><svg class="icon" style="width:14px;height:14px"><use href="#i-shield"/></svg><span>Only you and the person you chat with can read your messages.</span></div>
+    </aside>
+    <main class="main" id="main"></main>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
