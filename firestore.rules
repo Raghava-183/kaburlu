@@ -27,6 +27,12 @@ service cloud.firestore {
       allow get: if signedIn();
     }
 
+    // Push notification tokens for your devices. Only you can see or change yours;
+    // the server reads them to send you notifications.
+    match /pushTokens/{uid} {
+      allow read, write: if isMe(uid);
+    }
+
     // Email codes (otps/...) and password hashes (secrets/...) are server-only:
     // no rule here means browsers can't read or write them.
 
@@ -50,18 +56,38 @@ service cloud.firestore {
             || request.resource.data.lastFrom == resource.data.lastFrom);
 
       match /messages/{msgId} {
-        allow read: if signedIn()
-          && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+        function isMember() {
+          return signedIn() && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+        }
+        // Photos, videos and files are stored on Cloudinary; the message only keeps the link.
+        function validMedia(m) {
+          return m == null || (m is map
+            && m.url is string && m.url.size() < 600 && m.url.matches('https://res[.]cloudinary[.]com/.+')
+            && m.type in ['image', 'video', 'file']);
+        }
+
+        allow read: if isMember();
 
         allow create: if signedIn()
           && request.auth.uid in getAfter(/databases/$(database)/documents/chats/$(chatId)).data.members
-          && request.resource.data.keys().hasOnly(['from', 'text', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['from', 'text', 'createdAt', 'media'])
           && request.resource.data.from == request.auth.uid
           && request.resource.data.text is string
-          && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 2000
+          && request.resource.data.text.size() <= 2000
+          && (request.resource.data.text.size() > 0 || request.resource.data.get('media', null) != null)
+          && validMedia(request.resource.data.get('media', null))
           && request.resource.data.createdAt == request.time;
 
-        allow update, delete: if false;
+        // Reactions: each person can only add, change or remove their own emoji.
+        allow update: if isMember()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+          && request.resource.data.reactions is map
+          && request.resource.data.reactions.diff(resource.data.get('reactions', {})).affectedKeys().hasOnly([request.auth.uid])
+          && (!(request.auth.uid in request.resource.data.reactions)
+              || (request.resource.data.reactions[request.auth.uid] is string
+                  && request.resource.data.reactions[request.auth.uid].size() <= 16));
+
+        allow delete: if false;
       }
     }
   }

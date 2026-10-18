@@ -4,9 +4,14 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, doc, getDoc, setDoc, updateDoc, collection, query, where, orderBy,
-  limit, onSnapshot, writeBatch, serverTimestamp
+  limit, onSnapshot, writeBatch, serverTimestamp, arrayUnion, arrayRemove, deleteField
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig, COUNTRY_CODE } from "./firebase-config.js";
+import {
+  getMessaging, getToken, onMessage, isSupported, deleteToken
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js";
+import * as CONFIG from "./firebase-config.js";
+const { firebaseConfig, COUNTRY_CODE } = CONFIG;
+const VAPID_KEY = CONFIG.VAPID_KEY || "";
 
 const fb = initializeApp(firebaseConfig);
 const auth = getAuth(fb);
@@ -65,6 +70,23 @@ const hiddenSet = () => new Set(S.settings.hidden || []);
 // Name to show for a contact: your own nickname for them, or the name they registered with.
 const nameOf = (p) => (p && S.settings.nicknames?.[p.id]) || p?.name || "…";
 const setScreen = (id) => { for (const s of ["loading", "auth", "app"]) $("#" + s).hidden = s !== id; };
+
+/* ================= THEMES ================= */
+const ACCENTS = [["jade", "#0E7C66", "Jade"], ["ocean", "#1F6FB2", "Ocean"], ["rose", "#C0396B", "Rose"], ["sunset", "#C8561E", "Sunset"], ["violet", "#6A4BC4", "Violet"]];
+const WALLS = [["dots", "Dots"], ["plain", "Plain"], ["gradient", "Glow"], ["doodle", "Doodle"]];
+const themeNow = () => ({ mode: "auto", accent: "jade", wall: "dots", ...ls.get("theme", {}) });
+function applyTheme(t) {
+  t = { mode: "auto", accent: "jade", wall: "dots", ...t };
+  const r = document.documentElement;
+  if (t.mode === "light" || t.mode === "dark") r.dataset.theme = t.mode; else delete r.dataset.theme;
+  if (t.accent !== "jade") r.dataset.accent = t.accent; else delete r.dataset.accent;
+  if (t.wall !== "dots") r.dataset.wall = t.wall; else delete r.dataset.wall;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = getComputedStyle(r).getPropertyValue("--accent").trim() || "#0E7C66";
+  ls.set("theme", t);
+}
+applyTheme(themeNow());
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => applyTheme(themeNow()));
 
 /* ================= server calls (Vercel functions) ================= */
 async function api(path, body) {
@@ -189,6 +211,7 @@ async function startApp(u) {
   }));
   S.unsubs.push(onSnapshot(doc(db, "users", u.uid, "private", "settings"), s => {
     S.settings = s.exists() ? s.data() : { hidden: [], pinHash: null, salt: null };
+    if (S.settings.theme && JSON.stringify({ ...themeNow(), ...S.settings.theme }) !== JSON.stringify(themeNow())) applyTheme(S.settings.theme);
     renderList(); renderMain(false);
   }));
   S.unsubs.push(onSnapshot(
@@ -198,11 +221,14 @@ async function startApp(u) {
       await loadPeople(S.chats.map(c => otherOf(c.id, u.uid)));
       renderList();
       if (S.open && S.chats.some(c => c.id === S.open) && !S.unsubMsgs) subscribeMsgs(S.open);
+      if (S.open) renderMsgs();
       markRead();
+      openPendingChat();
     },
     err => { console.error(err); toast("Couldn't load chats. Check the Firestore index (see README)."); }
   ));
   renderMe(); renderMain(true);
+  updateNotifyUI(); refreshPushToken();
 }
 function stopApp() {
   S.unsubs.forEach(f => f()); S.unsubs = [];
@@ -210,7 +236,6 @@ function stopApp() {
   S.user = null; S.profile = null; S.chats = []; S.people = new Map(); S.open = null; S.msgs = [];
   $("#app").classList.remove("open");
 }
-$("#b-logout").onclick = () => signOut(auth);
 
 async function loadPeople(ids) {
   const need = [...new Set(ids)].filter(id => !S.people.has(id));
@@ -264,12 +289,16 @@ function isUnread(c) {
 function rowHtml(cid, chat, inVault) {
   const o = S.people.get(otherOf(cid, S.user.uid)) || { id: cid, name: "…", phone: "" };
   const unread = isUnread(chat);
-  const preview = chat?.lastText ? (chat.lastFrom === S.user.uid ? "You: " : "") + chat.lastText : fmtPhone(o.phone);
+  const mine = chat?.lastFrom === S.user.uid;
+  const seen = mine && ms(chat?.reads?.[o.id] || 0) >= ms(chat?.lastAt || 0);
+  const preview = chat?.lastText
+    ? (mine ? `<svg class="tick ${seen ? "seen" : ""}"><use href="#i-check${seen ? 2 : 1}"/></svg>You: ` : "") + esc(chat.lastText)
+    : esc(fmtPhone(o.phone));
   return `<div class="row ${S.open === cid ? "active" : ""} ${unread ? "unread" : ""}" data-cid="${esc(cid)}" tabindex="0" role="button">
-    ${avatar(o)}
+    ${avatar({ ...o, name: nameOf(o) })}
     <div class="meta">
       <div class="l1"><span class="name">${esc(nameOf(o))}</span>${chat?.lastAt ? `<span class="time">${esc(listTime(ms(chat.lastAt)))}</span>` : ""}</div>
-      <div class="l2"><span class="preview">${esc(preview)}</span>${unread ? `<span class="dot"></span>` : ""}</div>
+      <div class="l2"><span class="preview">${preview}</span>${unread ? `<span class="dot"></span>` : ""}</div>
     </div>
     <button class="more" data-menu="${esc(cid)}" data-vault="${inVault ? 1 : 0}" aria-label="Chat options" aria-expanded="false"><svg class="icon"><use href="#i-more"/></svg></button>
   </div>`;
@@ -323,8 +352,9 @@ function subscribeMsgs(cid) {
   S.unsubMsgs?.();
   S.unsubMsgs = onSnapshot(
     query(collection(db, "chats", cid, "messages"), orderBy("createdAt", "desc"), limit(300)),
+    { includeMetadataChanges: true },
     snap => {
-      S.msgs = snap.docs.map(d => ({ id: d.id, ...d.data({ serverTimestamps: "estimate" }) })).reverse();
+      S.msgs = snap.docs.map(d => ({ id: d.id, pending: d.metadata.hasPendingWrites, ...d.data({ serverTimestamps: "estimate" }) })).reverse();
       renderMsgs(); markRead();
     },
     err => { console.error(err); }
@@ -388,13 +418,16 @@ function renderMain(full) {
   main.innerHTML = `
     <div class="conv-top">
       <button class="iconbtn back" id="b-back" aria-label="Back to chats"><svg class="icon"><use href="#i-back"/></svg></button>
-      ${avatar(o, "sm")}
+      ${avatar({ ...o, name: nameOf(o) }, "sm")}
       <div class="who">${convWho(o, isHidden)}</div>
       <button class="iconbtn" id="b-rename" title="Rename" aria-label="Rename contact"><svg class="icon"><use href="#i-pencil"/></svg></button>
       ${hideBtn(isHidden)}
     </div>
     <div class="msgs" id="msgs" aria-live="polite"></div>
     <form class="composer" id="composer">
+      <button class="tool" id="b-emoji" type="button" aria-label="Emoji" aria-expanded="false"><svg class="icon"><use href="#i-smile"/></svg></button>
+      <button class="tool" id="b-attach" type="button" aria-label="Send a photo, video or file"><svg class="icon"><use href="#i-clip"/></svg></button>
+      <input type="file" id="file-in" accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip" hidden>
       <textarea id="draft" rows="1" placeholder="Type a message" maxlength="2000" aria-label="Message"></textarea>
       <button class="send" id="send" type="submit" aria-label="Send" disabled><svg class="icon"><use href="#i-send"/></svg></button>
     </form>`;
@@ -406,6 +439,9 @@ function renderMain(full) {
   $("#send").disabled = !ta.value.trim();
   $("#composer").addEventListener("submit", (e) => { e.preventDefault(); send(); });
   $("#b-back").onclick = closeChat;
+  $("#b-emoji").onclick = (e) => { e.stopPropagation(); toggleEmoji(); };
+  $("#b-attach").onclick = () => $("#file-in").click();
+  $("#file-in").onchange = (e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) uploadAndSend(f); };
   if (matchMedia("(min-width:761px)").matches) ta.focus();
 }
 $("#main").addEventListener("click", (e) => {
@@ -413,48 +449,179 @@ $("#main").addEventListener("click", (e) => {
   if (e.target.closest("#b-rename")) renameContact(otherOf(S.open, S.user.uid));
 });
 
+const REACTIONS = ["❤️", "😂", "👍", "😮", "😢", "🙏"];
+const cldThumb = (url, w = 720) => url.replace("/upload/", `/upload/c_limit,w_${w},q_auto,f_auto/`);
+const cldDownload = (url) => url.replace("/upload/", "/upload/fl_attachment/");
+const fmtSize = (b) => b > 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
+const mediaLabel = (m) => ({ image: "📷 Photo", video: "🎥 Video", file: "📄 " + (m.name || "File") }[m.type] || "📎 Attachment");
+
+function tickHtml(m, otherRead) {
+  if (m.from !== S.user.uid) return "";
+  if (m.pending) return `<svg class="tick"><use href="#i-clock"/></svg>`;
+  const seen = otherRead >= ms(m.createdAt);
+  return `<svg class="tick ${seen ? "seen" : ""}" aria-label="${seen ? "Seen" : "Sent"}"><use href="#i-check${seen ? 2 : 1}"/></svg>`;
+}
+function reactHtml(m) {
+  const r = m.reactions || {}; const vals = Object.values(r); if (!vals.length) return "";
+  const counts = {}; vals.forEach(e => counts[e] = (counts[e] || 0) + 1);
+  const em = Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 3).join("");
+  return `<span class="reacts" data-react="${esc(m.id)}">${esc(em)}${vals.length > 1 ? `<span class="n">${vals.length}</span>` : ""}</span>`;
+}
+function mediaHtml(md) {
+  if (md.type === "image") {
+    const ar = md.w && md.h ? `aspect-ratio:${md.w}/${md.h};` : "";
+    return `<a class="ph" data-full="${esc(md.url)}" href="${esc(md.url)}" target="_blank" rel="noopener"><img src="${esc(cldThumb(md.url))}" alt="Photo" loading="lazy" style="${ar}"></a>`;
+  }
+  if (md.type === "video") return `<video class="vid" src="${esc(md.url)}" controls preload="metadata" playsinline></video>`;
+  const ext = (md.name || "").split(".").pop().slice(0, 4).toUpperCase() || "FILE";
+  return `<a class="file" href="${esc(md.url)}" target="_blank" rel="noopener"><span class="fi">${esc(ext)}</span><div><b>${esc(md.name || "File")}</b><span>${md.size ? esc(fmtSize(md.size)) : "Open"}</span></div></a>`;
+}
+
 function renderMsgs() {
   const box = $("#msgs"); if (!box) return;
   const me = S.user.uid;
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
-  if (!S.msgs.length) {
+  const ups = uploads.filter(u => u.cid === S.open);
+  if (!S.msgs.length && !ups.length) {
     const o = S.people.get(otherOf(S.open, me));
     box.innerHTML = `<div class="empty" style="margin:auto"><div class="bubble-ill"><svg class="icon" style="width:28px;height:28px"><use href="#i-msg"/></svg></div>No messages yet.<br>Say namaste to ${esc(nameOf(o).split(" ")[0] || "them")}.</div>`;
     return;
   }
+  const chat = S.chats.find(c => c.id === S.open);
+  const otherRead = ms(chat?.reads?.[otherOf(S.open, me)] || 0);
   let html = "", lastDay = "", lastFrom = "", lastTs = 0;
   for (const m of S.msgs) {
     const t = ms(m.createdAt); const dk = dayKey(t);
     if (dk !== lastDay) { html += `<div class="day">${esc(dayLabel(t))}</div>`; lastDay = dk; lastFrom = ""; }
     const cont = m.from === lastFrom && t - lastTs < 5 * 60 * 1000;
-    html += `<div class="b ${m.from === me ? "out" : "in"} ${cont ? "cont" : "first"}">${esc(m.text)}<span class="t">${esc(hhmm(t))}</span></div>`;
+    const r = reactHtml(m);
+    const cls = `b ${m.from === me ? "out" : "in"} ${cont ? "cont" : "first"}${m.media ? " media" : ""}${r ? " has-react" : ""}`;
+    // No whitespace between tags: bubbles use white-space: pre-wrap.
+    const body = m.media
+      ? mediaHtml(m.media) + (m.text ? `<span class="cap">${esc(m.text)}</span>` : "")
+      : esc(m.text);
+    html += `<div class="${cls}" data-id="${esc(m.id)}">${body}<span class="t">${esc(hhmm(t))}${tickHtml(m, otherRead)}</span>${r}</div>`;
     lastFrom = m.from; lastTs = t;
+  }
+  for (const u of ups) {
+    html += `<div class="uploading" data-up="${u.id}"><div class="row2"><b>${esc(u.name)}</b><span>${u.error ? "Failed" : Math.round(u.pct) + "%"}</span></div><div class="bar"><i style="width:${u.pct}%"></i></div>${u.error ? `<span style="color:var(--warn)">${esc(u.error)}</span>` : ""}</div>`;
   }
   box.innerHTML = html;
   if (nearBottom || box.dataset.init !== S.open) { box.scrollTop = box.scrollHeight; box.dataset.init = S.open; }
+  // Keep the newest message in view while photos finish loading.
+  if (!box.dataset.watch) {
+    box.dataset.watch = "1";
+    box.addEventListener("load", (e) => {
+      if (e.target.tagName === "IMG" && box.scrollHeight - box.scrollTop - box.clientHeight < 400) box.scrollTop = box.scrollHeight;
+    }, true);
+  }
 }
 
 let sendChain = Promise.resolve();
 function send() {
   const ta = $("#draft"); const text = ta.value.trim(); if (!text || !S.open) return;
-  const cid = S.open; const me = S.user.uid;
+  const cid = S.open;
   ta.value = ""; grow(ta); $("#send").disabled = true;
   const d = ls.get("drafts", {}); delete d[cid]; ls.set("drafts", d);
-  sendChain = sendChain.then(async () => {
-    try {
-      const b = writeBatch(db);
-      b.set(doc(db, "chats", cid), {
-        members: cid.split("_"), lastText: text.slice(0, 140), lastAt: serverTimestamp(), lastFrom: me,
-        reads: { [me]: serverTimestamp() }
-      }, { merge: true });
-      b.set(doc(collection(db, "chats", cid, "messages")), { from: me, text, createdAt: serverTimestamp() });
-      await b.commit();
-    } catch (ex) {
-      console.error(ex); toast("Message not sent. Check your connection and try again.");
-      if (S.open === cid && !$("#draft").value) { $("#draft").value = text; $("#send").disabled = false; }
-    }
+  closeEmoji();
+  postMessage(cid, text, null).catch(() => {
+    if (S.open === cid && !$("#draft").value) { $("#draft").value = text; $("#send").disabled = false; }
   });
 }
+function postMessage(cid, text, media) {
+  const me = S.user.uid;
+  const p = sendChain.then(async () => {
+    try {
+      const b = writeBatch(db);
+      const lastText = media ? (mediaLabel(media) + (text ? " · " + text : "")) : text;
+      b.set(doc(db, "chats", cid), {
+        members: cid.split("_"), lastText: lastText.slice(0, 140), lastAt: serverTimestamp(), lastFrom: me,
+        reads: { [me]: serverTimestamp() }
+      }, { merge: true });
+      const msg = { from: me, text, createdAt: serverTimestamp() };
+      if (media) msg.media = media;
+      b.set(doc(collection(db, "chats", cid, "messages")), msg);
+      await b.commit();
+      notifyOther(cid);
+    } catch (ex) {
+      console.error(ex); toast("Message not sent. Check your connection and try again.");
+      throw ex;
+    }
+  });
+  sendChain = p.catch(() => {});
+  return p;
+}
+
+/* ================= REACTIONS ================= */
+let pressT = null;
+function closeReactBar() { document.querySelector(".react-bar")?.remove(); document.querySelector(".b.picked")?.classList.remove("picked"); }
+function openReactBar(bubble) {
+  closeReactBar(); closeEmoji();
+  const m = S.msgs.find(x => x.id === bubble.dataset.id); if (!m || m.pending) return;
+  const mine = m.reactions?.[S.user.uid];
+  const bar = document.createElement("div"); bar.className = "react-bar"; bar.setAttribute("role", "menu");
+  bar.innerHTML = REACTIONS.map(e => `<button data-e="${e}" aria-pressed="${mine === e}" aria-label="React ${e}">${e}</button>`).join("");
+  document.body.appendChild(bar);
+  bubble.classList.add("picked");
+  const r = bubble.getBoundingClientRect();
+  const top = r.top - bar.offsetHeight - 8 < 8 ? r.bottom + 8 : r.top - bar.offsetHeight - 8;
+  const left = bubble.classList.contains("out") ? r.right - bar.offsetWidth : r.left;
+  bar.style.top = top + "px";
+  bar.style.left = Math.max(8, Math.min(left, innerWidth - bar.offsetWidth - 8)) + "px";
+  bar.onclick = async (e) => {
+    const b = e.target.closest("[data-e]"); if (!b) return;
+    const emoji = b.dataset.e; closeReactBar();
+    try {
+      await updateDoc(doc(db, "chats", S.open, "messages", m.id), { [`reactions.${S.user.uid}`]: mine === emoji ? deleteField() : emoji });
+    } catch (ex) { console.error(ex); toast("Couldn't react. Try again."); }
+  };
+}
+$("#main").addEventListener("dblclick", (e) => {
+  const b = e.target.closest(".b[data-id]"); if (!b || e.target.closest("video,a")) return;
+  e.preventDefault(); getSelection()?.removeAllRanges(); openReactBar(b);
+});
+$("#main").addEventListener("contextmenu", (e) => {
+  const b = e.target.closest(".b[data-id]"); if (!b || e.target.closest("video")) return;
+  e.preventDefault(); openReactBar(b);
+});
+$("#main").addEventListener("touchstart", (e) => {
+  const b = e.target.closest(".b[data-id]"); if (!b || e.target.closest("video")) return;
+  clearTimeout(pressT); pressT = setTimeout(() => { navigator.vibrate?.(15); openReactBar(b); }, 450);
+}, { passive: true });
+for (const ev of ["touchend", "touchmove", "touchcancel"]) $("#main").addEventListener(ev, () => clearTimeout(pressT), { passive: true });
+$("#main").addEventListener("click", (e) => {
+  const chip = e.target.closest("[data-react]");
+  if (chip) { e.stopPropagation(); openReactBar(chip.closest(".b")); return; }
+  const ph = e.target.closest(".ph[data-full]");
+  if (ph) { e.preventDefault(); openViewer(ph.dataset.full); }
+});
+document.addEventListener("click", (e) => { if (!e.target.closest(".react-bar,[data-react]")) closeReactBar(); });
+document.addEventListener("scroll", closeReactBar, true);
+
+/* ================= EMOJI PICKER ================= */
+const EMOJI = {
+  "Smileys": "😀 😁 😂 🤣 😊 😍 🥰 😘 😎 🤩 🥳 😇 🙂 😉 😜 🤪 🤗 🤔 🤫 😴 😌 🥺 😢 😭 😤 😡 😱 😳 🤯 😅 🙃 😬",
+  "Hands": "👍 👎 👏 🙌 🙏 🤝 👋 ✌️ 🤞 👌 🤙 💪 👊 ✊ 🫶 👀",
+  "Hearts": "❤️ 🧡 💛 💚 💙 💜 🖤 🤍 💔 💕 💖 💯 ✨ 🔥 ⭐ 🌹",
+  "Fun": "🎉 🎂 🎁 🍕 🍔 ☕ 🍫 🍦 🏏 ⚽ 🎬 🎵 📚 💻 📱 🚗 ✈️ 🏖️ 🌧️ ☀️ 🌙 🐶 🐱 🦁"
+};
+function closeEmoji() { document.querySelector(".emoji-pop")?.remove(); $("#b-emoji")?.setAttribute("aria-expanded", "false"); }
+function toggleEmoji() {
+  if (document.querySelector(".emoji-pop")) { closeEmoji(); return; }
+  const pop = document.createElement("div"); pop.className = "emoji-pop";
+  pop.innerHTML = Object.entries(EMOJI).map(([g, list]) => `<div class="grp">${g}</div>` + list.split(" ").map(e => `<button type="button" data-e="${e}">${e}</button>`).join("")).join("");
+  $("#composer").appendChild(pop); $("#b-emoji").setAttribute("aria-expanded", "true");
+  pop.onclick = (e) => {
+    e.stopPropagation();
+    const b = e.target.closest("[data-e]"); if (!b) return;
+    const ta = $("#draft"); const st = ta.selectionStart ?? ta.value.length, en = ta.selectionEnd ?? st;
+    ta.value = ta.value.slice(0, st) + b.dataset.e + ta.value.slice(en);
+    const pos = st + b.dataset.e.length; ta.setSelectionRange(pos, pos);
+    ta.dispatchEvent(new Event("input"));
+    if (!matchMedia("(hover:none)").matches) ta.focus();
+  };
+}
+document.addEventListener("click", (e) => { if (!e.target.closest(".emoji-pop,#b-emoji")) closeEmoji(); });
 
 /* ================= HIDE + PIN ================= */
 const settingsRef = () => doc(db, "users", S.user.uid, "private", "settings");
@@ -577,24 +744,53 @@ function modal(html) {
   sc.addEventListener("click", (e) => { if (e.target === sc || e.target.closest("[data-close]")) sc.remove(); });
   document.body.appendChild(sc); return sc;
 }
-$("#b-settings").onclick = () => {
+$("#b-settings").onclick = openSettings;
+function openSettings() {
   const st = S.settings; const n = (st.hidden || []).length;
-  const sc = modal(`<div class="lockic"><svg class="icon"><use href="#i-shield"/></svg></div>
-    <h3>Privacy & PIN</h3>
-    <p class="sub">${st.pinHash ? `PIN is set. ${n} chat${n === 1 ? "" : "s"} hidden.` : "No PIN yet. Create one to start hiding chats."}</p>
-    <div style="display:grid;gap:10px">
-      <button class="btn" id="s-pin">${st.pinHash ? "Change PIN" : "Create PIN"}</button>
-      ${st.pinHash ? `<button class="btn ghost" id="s-forgot">Forgot PIN</button>` : ""}
-      <button class="btn ghost" data-close>Close</button>
+  const t = themeNow();
+  const accentName = ACCENTS.find(a => a[0] === t.accent)?.[2] || "Jade";
+  const modeName = { auto: "Auto", light: "Light", dark: "Dark" }[t.mode];
+  const sc = modal(`<h3>Settings</h3>
+    <div class="settings-list">
+      <button class="settings-item" id="s-theme"><svg class="icon"><use href="#i-palette"/></svg><div><b>Appearance</b><span>${esc(modeName)} · ${esc(accentName)} · ${esc(WALLS.find(w => w[0] === t.wall)?.[1] || "Dots")} wallpaper</span></div></button>
+      <button class="settings-item" id="s-notify"><svg class="icon"><use href="#i-bell"/></svg><div><b>Notifications</b><span>${esc(notifyStatusText())}</span></div></button>
+      <button class="settings-item" id="s-pin"><svg class="icon"><use href="#i-lock"/></svg><div><b>${st.pinHash ? "Change PIN" : "Create PIN"}</b><span>${st.pinHash ? `${n} chat${n === 1 ? "" : "s"} hidden` : "Needed to hide chats"}</span></div></button>
+      ${st.pinHash ? `<button class="settings-item" id="s-forgot"><svg class="icon"><use href="#i-shield"/></svg><div><b>Forgot PIN</b><span>Reset it with an email code</span></div></button>` : ""}
     </div>
+    <button class="btn ghost" data-close>Close</button>
     <p class="fine">Email: ${esc(st.email || "not set")}</p>`);
+  sc.querySelector("#s-theme").onclick = () => { sc.remove(); openTheme(); };
+  sc.querySelector("#s-notify").onclick = () => { sc.remove(); enableNotifications(); };
   sc.querySelector("#s-pin").onclick = () => {
     sc.remove();
     if (!S.settings.pinHash) { setupPin(); return; }
     pinPad({ title: "Enter current PIN", sub: "Confirm it's you first.", onPin: async (p) => (await checkPin(p)) ? (setTimeout(() => setupPin(), 0), true) : "Wrong PIN. Try again." });
   };
   sc.querySelector("#s-forgot")?.addEventListener("click", () => { sc.remove(); forgotPin(); });
-};
+}
+
+let themeSaveT;
+function openTheme() {
+  let t = themeNow();
+  const sc = modal(`<h3>Appearance</h3>
+    <p class="opt-label">Mode</p>
+    <div class="seg3" id="th-mode">${[["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]].map(([k, l]) => `<button data-v="${k}" aria-pressed="${t.mode === k}">${l}</button>`).join("")}</div>
+    <p class="opt-label">Color</p>
+    <div class="swatches" id="th-accent">${ACCENTS.map(([k, c, l]) => `<button class="swatch" data-v="${k}" style="background:${c}" aria-label="${l}" title="${l}" aria-pressed="${t.accent === k}"></button>`).join("")}</div>
+    <p class="opt-label">Chat wallpaper</p>
+    <div class="walls" id="th-wall">${WALLS.map(([k, l]) => `<button class="wall w-${k}" data-v="${k}" aria-pressed="${t.wall === k}">${l}</button>`).join("")}</div>
+    <button class="btn" data-close>Done</button>`);
+  sc.querySelector(".modal").classList.add("wide");
+  const bind = (id, key) => sc.querySelector(id).addEventListener("click", (e) => {
+    const b = e.target.closest("[data-v]"); if (!b) return;
+    t = { ...t, [key]: b.dataset.v };
+    sc.querySelectorAll(`${id} [data-v]`).forEach(x => x.setAttribute("aria-pressed", x === b));
+    applyTheme(t);
+    clearTimeout(themeSaveT);
+    themeSaveT = setTimeout(() => { if (S.user) setDoc(settingsRef(), { theme: t }, { merge: true }).catch(() => {}); }, 600);
+  });
+  bind("#th-mode", "mode"); bind("#th-accent", "accent"); bind("#th-wall", "wall");
+}
 
 /* Forgot PIN: prove it's you with a fresh code sent to your own email. Hidden chats stay hidden. */
 function forgotPin() {
@@ -694,3 +890,152 @@ $("#b-install").onclick = doInstall;
 $("#b-install-auth").onclick = doInstall;
 $("#b-install-x").onclick = () => { ls.set("installDismissed", Date.now() + 7 * 864e5); updateInstallUI(); };
 updateInstallUI();
+
+/* ================= MEDIA (Cloudinary) ================= */
+// Files go straight from the browser to Cloudinary. Our server only signs the upload,
+// after checking you're signed in and part of this chat.
+const uploads = [];
+const MAX_IMAGE = 10 * 1024 * 1024, MAX_VIDEO = 100 * 1024 * 1024, MAX_FILE = 10 * 1024 * 1024;
+
+async function uploadAndSend(file) {
+  const cid = S.open; if (!cid) return;
+  const kind = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : "file";
+  const max = kind === "video" ? MAX_VIDEO : kind === "image" ? MAX_IMAGE : MAX_FILE;
+  if (file.size > max) { toast(`That ${kind === "file" ? "file" : kind} is too big. The limit is ${fmtSize(max)}.`); return; }
+
+  const up = { id: Math.random().toString(36).slice(2), cid, name: file.name, pct: 0, error: "" };
+  uploads.push(up); renderMsgs();
+  const done = () => { uploads.splice(uploads.indexOf(up), 1); renderMsgs(); };
+  try {
+    const idToken = await S.user.getIdToken();
+    const sig = await api("sign-upload", { idToken, chatId: cid });
+    const res = await new Promise((resolve, reject) => {
+      const fd = new FormData();
+      fd.append("file", file); fd.append("api_key", sig.apiKey); fd.append("timestamp", sig.timestamp);
+      fd.append("signature", sig.signature); fd.append("folder", sig.folder);
+      const xhr = new XMLHttpRequest();
+      const type = kind === "file" ? "raw" : kind;
+      xhr.open("POST", `https://api.cloudinary.com/v1_1/${sig.cloudName}/${type}/upload`);
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) { up.pct = e.loaded / e.total * 100; const el = document.querySelector(`[data-up="${up.id}"]`); if (el) { el.querySelector("i").style.width = up.pct + "%"; el.querySelector(".row2 span").textContent = Math.round(up.pct) + "%"; } } };
+      xhr.onload = () => { let d = {}; try { d = JSON.parse(xhr.responseText); } catch {} xhr.status < 300 ? resolve(d) : reject(new Error(d.error?.message || "Upload failed.")); };
+      xhr.onerror = () => reject(new Error("Upload failed. Check your connection."));
+      xhr.send(fd);
+    });
+    const media = { url: res.secure_url, type: kind, name: file.name.slice(0, 120), size: res.bytes || file.size };
+    if (res.width && res.height) { media.w = res.width; media.h = res.height; }
+    // Use what's typed in the box as the caption.
+    let caption = "";
+    if (S.open === cid) {
+      const ta = $("#draft"); caption = ta.value.trim().slice(0, 2000); ta.value = ""; grow(ta); $("#send").disabled = true;
+      const d = ls.get("drafts", {}); delete d[cid]; ls.set("drafts", d);
+    }
+    done();
+    await postMessage(cid, caption, media);
+  } catch (ex) {
+    console.error(ex);
+    up.error = ex.message; renderMsgs();
+    setTimeout(done, 5000);
+  }
+}
+
+function openViewer(url) {
+  const lb = document.createElement("div"); lb.className = "lightbox"; lb.setAttribute("role", "dialog"); lb.setAttribute("aria-label", "Photo");
+  lb.innerHTML = `<div class="lb-top"><a href="${esc(cldDownload(url))}" target="_blank" rel="noopener">Download</a><button type="button" data-x>Close</button></div>
+    <div class="lb-img"><img src="${esc(url)}" alt="Photo"></div>`;
+  const close = () => { lb.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  lb.addEventListener("click", (e) => { if (e.target.closest("[data-x]") || e.target.classList.contains("lb-img")) close(); });
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(lb);
+}
+
+/* ================= PUSH NOTIFICATIONS (Firebase Cloud Messaging) ================= */
+let messaging = null, pushReady = false;
+isSupported().then((ok) => {
+  pushReady = true;
+  if (ok) {
+    messaging = getMessaging(fb);
+    // While the app is open, show a small banner instead of a system notification.
+    onMessage(messaging, (p) => {
+      const d = p.data || {};
+      if (d.chatId && d.chatId === S.open && !document.hidden) return;
+      toast(`${d.title || "Kaburlu"}: ${d.body || "New message"}`);
+    });
+  }
+  updateNotifyUI();
+  if (S.user) refreshPushToken();
+}).catch(() => { pushReady = true; updateNotifyUI(); });
+
+const pushPermission = () => ("Notification" in window) ? Notification.permission : "unsupported";
+function notifyStatusText() {
+  if (!messaging) return isIOS && !isStandalone() ? "On iPhone, install the app first" : "Not supported in this browser";
+  if (!VAPID_KEY || VAPID_KEY.startsWith("PASTE")) return "Not set up yet (see README)";
+  return { granted: "On", denied: "Blocked in browser settings", default: "Off. Tap to turn on" }[pushPermission()] || "Off";
+}
+function updateNotifyUI() {
+  const show = S.user && messaging && VAPID_KEY && !VAPID_KEY.startsWith("PASTE") && pushPermission() === "default" && ls.get("notifyDismissed", 0) < Date.now();
+  $("#notify-bar").hidden = !show;
+}
+async function saveToken() {
+  const reg = await navigator.serviceWorker.ready;
+  const token = await getToken(messaging, { vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
+  if (!token) throw new Error("no token");
+  const old = ls.get("pushToken", null);
+  if (old !== token || !ls.get("pushSaved", false)) {
+    await setDoc(doc(db, "pushTokens", S.user.uid), { tokens: arrayUnion(token) }, { merge: true });
+    if (old && old !== token) updateDoc(doc(db, "pushTokens", S.user.uid), { tokens: arrayRemove(old) }).catch(() => {});
+    ls.set("pushToken", token); ls.set("pushSaved", true);
+  }
+}
+async function refreshPushToken() {
+  if (!messaging || !S.user || pushPermission() !== "granted" || !VAPID_KEY || VAPID_KEY.startsWith("PASTE")) return;
+  try { await saveToken(); } catch (ex) { console.warn("push token", ex); }
+}
+async function enableNotifications() {
+  if (!messaging) {
+    if (isIOS && !isStandalone()) toast("On iPhone, first add Kaburlu to your home screen, then turn on notifications from the app.");
+    else toast("This browser doesn't support notifications. Try Chrome.");
+    return;
+  }
+  if (!VAPID_KEY || VAPID_KEY.startsWith("PASTE")) { toast("Notifications aren't set up yet. Add the VAPID key (see README)."); return; }
+  if (pushPermission() === "denied") { toast("Notifications are blocked. Allow them in your browser's site settings, then try again."); return; }
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { toast("Notifications stay off."); updateNotifyUI(); return; }
+    ls.set("pushSaved", false);
+    await saveToken();
+    toast("Notifications are on");
+  } catch (ex) { console.error(ex); toast("Couldn't turn on notifications. Try again."); }
+  updateNotifyUI();
+}
+$("#b-notify").onclick = enableNotifications;
+$("#b-notify-x").onclick = () => { ls.set("notifyDismissed", Date.now() + 7 * 864e5); updateNotifyUI(); };
+
+// Ask the server to notify the other person (it reads the real message from the database).
+async function notifyOther(cid) {
+  try { const idToken = await S.user.getIdToken(); await api("notify", { idToken, chatId: cid }); } catch {}
+}
+
+// Stop notifications for this device on log out.
+$("#b-logout").onclick = async () => {
+  const token = ls.get("pushToken", null);
+  if (token && S.user) {
+    try { await updateDoc(doc(db, "pushTokens", S.user.uid), { tokens: arrayRemove(token) }); } catch {}
+    try { if (messaging) await deleteToken(messaging); } catch {}
+    ls.set("pushToken", null); ls.set("pushSaved", false);
+  }
+  signOut(auth);
+};
+
+// Tapping a notification opens that chat.
+let pendingChat = new URLSearchParams(location.search).get("chat");
+function openPendingChat() {
+  if (!pendingChat || !S.user) return;
+  const cid = pendingChat;
+  if (!S.chats.some(c => c.id === cid)) return;
+  pendingChat = null; history.replaceState(null, "", "/");
+  openChat(cid);
+}
+navigator.serviceWorker?.addEventListener("message", (e) => {
+  if (e.data?.type === "open-chat" && e.data.chatId) { pendingChat = e.data.chatId; openPendingChat(); }
+});

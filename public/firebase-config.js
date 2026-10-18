@@ -11,3 +11,7 @@ export const firebaseConfig = {
 
 // Country code used for the mobile number field.
 export const COUNTRY_CODE = "+91";
+
+// For push notifications: Firebase console → Project settings → Cloud Messaging →
+// Web Push certificates → Generate key pair. Paste the long "Key pair" value here.
+export const VAPID_KEY = "PASTE_VAPID_KEY";

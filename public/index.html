@@ -17,11 +17,26 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
 <link rel="stylesheet" href="styles.css">
+<script>
+  // Apply the saved theme before the page paints, so there's no flash.
+  try { const t = JSON.parse(localStorage.getItem("kaburlu:theme") || "{}"), r = document.documentElement;
+    if (t.mode === "light" || t.mode === "dark") r.dataset.theme = t.mode;
+    if (t.accent && t.accent !== "jade") r.dataset.accent = t.accent;
+    if (t.wall && t.wall !== "dots") r.dataset.wall = t.wall;
+  } catch (e) {}
+</script>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-install" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 7v7M9 11l3 3 3-3M10 18.5h4"/></symbol>
   <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9a6 6 0 0 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9z"/><path d="M10 20a2.2 2.2 0 0 0 4 0"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M20.5 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8l-8.4 8.4a1.7 1.7 0 0 1-2.4-2.4l7.7-7.7"/></symbol>
+  <symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5c1.8 2.2 5.2 2.2 7 0"/><path d="M9 9.5h.01M15 9.5h.01" stroke-width="2.6"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 2-2 0-1.5-1.5-2-1.5-3.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4c0-4-4-7-9-7z"/><path d="M7.5 11.5h.01M10 7.5h.01M15 7.5h.01" stroke-width="2.6"/></symbol>
+  <symbol id="i-check1" viewBox="0 0 16 11"><path d="M2.5 6l3 3 6-7"/></symbol>
+  <symbol id="i-check2" viewBox="0 0 16 11"><path d="M1 6l3 3 6-7M7.5 8.4l.6.6 6-7"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 16 11"><circle cx="8" cy="5.5" r="4.2"/><path d="M8 3.3v2.3l1.5 1"/></symbol>
   <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.7" r="1.2"/></symbol>
   <symbol id="i-unlock" viewBox="0 0 24 24"><rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 7.6-1.7"/></symbol>
   <symbol id="i-eyeoff" viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c5 0 9 4.5 10 7-.4 1-1.3 2.4-2.6 3.7M6.6 6.6C4.4 8 2.8 10.2 2 12c1 2.5 5 7 10 7 1.8 0 3.4-.6 4.8-1.4"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
@@ -94,7 +109,7 @@
         <div id="me-av"></div>
         <div class="who"><b id="me-name"></b><span id="me-phone" class="mono"></span></div>
         <button class="iconbtn vault" id="b-vault" title="Hidden chats" aria-label="Hidden chats"><svg class="icon"><use href="#i-lock"/></svg></button>
-        <button class="iconbtn" id="b-settings" title="PIN settings" aria-label="PIN settings"><svg class="icon"><use href="#i-gear"/></svg></button>
+        <button class="iconbtn" id="b-settings" title="Settings" aria-label="Settings"><svg class="icon"><use href="#i-gear"/></svg></button>
         <button class="iconbtn" id="b-logout" title="Log out" aria-label="Log out"><svg class="icon"><use href="#i-out"/></svg></button>
       </div>
       <div class="vault-head" id="vault-head" hidden>
@@ -107,6 +122,12 @@
         <div><b>Get the Kaburlu app</b><span>Add it to your home screen. Opens like a normal app.</span></div>
         <button class="btn" id="b-install" type="button">Install</button>
         <button class="iconbtn" id="b-install-x" type="button" aria-label="Not now">✕</button>
+      </div>
+      <div class="notify-bar" id="notify-bar" hidden>
+        <svg class="icon"><use href="#i-bell"/></svg>
+        <span>Get notified when someone messages you.</span>
+        <button class="btn" id="b-notify" type="button">Turn on</button>
+        <button class="iconbtn" id="b-notify-x" type="button" aria-label="Not now" style="width:30px;height:30px;font-size:13px">✕</button>
       </div>
       <form class="newchat" id="newchat" novalidate>
         <label class="search"><svg class="icon"><use href="#i-search"/></svg><input id="search" inputmode="search" placeholder="Search chats or enter a number" autocomplete="off"></label>

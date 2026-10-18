@@ -79,6 +79,52 @@ Whenever you change files, run `vercel --prod` again.
 
 ---
 
+## Step 6 — Photos & files (Cloudinary, free)
+
+1. Sign up at https://cloudinary.com (free plan).
+2. On the **Dashboard** (Home), find **Cloud name**, **API Key** and **API Secret**. Click **Go to API Keys** if they're not shown.
+3. In Vercel → your project → **Settings → Environment Variables**, add:
+
+| Name | Value |
+|------|-------|
+| `CLOUDINARY_CLOUD_NAME` | your cloud name |
+| `CLOUDINARY_API_KEY` | your API key (numbers) |
+| `CLOUDINARY_API_SECRET` | your API secret. Keep it private. |
+
+4. **Let PDFs open:** in Cloudinary → ⚙️ **Settings → Security**, turn on **Allow delivery of PDF and ZIP files**, then **Save**.
+5. Redeploy: Vercel → **Deployments** → **⋯** on the latest → **Redeploy**.
+
+**Limits:** photos and other files up to 10 MB, videos up to 100 MB. Files are stored in Cloudinary under `kaburlu/<chat id>`, and each one gets a long secret link that nobody can guess.
+
+## Step 7 — Push notifications (Firebase Cloud Messaging, free)
+
+1. Firebase console → ⚙️ **Project settings** → **Cloud Messaging** tab.
+2. Under **Web configuration → Web Push certificates**, click **Generate key pair**. Copy the long key.
+3. Open `public/firebase-config.js` and paste it:
+   ```js
+   export const VAPID_KEY = "BKx…your long key…";
+   ```
+4. On the same Cloud Messaging tab, check that **Firebase Cloud Messaging API (V1)** says **Enabled**. If it's disabled, click ⋮ → **Manage API in Google Cloud Console** → **Enable**.
+5. Push the code (`git add .`, `git commit -m "notifications"`, `git push`).
+
+**Turning them on:** each user taps **Turn on** in the banner (or ⚙️ Settings → Notifications).
+
+- **Android / desktop Chrome:** works in the browser and in the installed app.
+- **iPhone:** works only after adding Kaburlu to the home screen (iOS 16.4 or newer), and turning it on from there.
+
+**Privacy:** if the person you message has hidden your chat, their notification just says "You have a new message", with no name and no text.
+
+## After every update
+
+```
+firebase deploy --only firestore   # only when firestore.rules changed
+git add .
+git commit -m "update"
+git push                           # Vercel deploys automatically
+```
+
+---
+
 ## If something goes wrong
 
 | Message on the site | Fix |
@@ -86,6 +132,10 @@ Whenever you change files, run `vercel --prod` again.
 | "Couldn't send the email. Check the Brevo settings" | The API key is wrong, or the sender email isn't confirmed in Brevo. Fix it in Vercel → Settings → Environment Variables, then run `vercel --prod`. |
 | "Server error" | One of the Firebase keys in Step 4 is wrong. The most common mistake is the private key: copy it again, carefully. Then run `vercel --prod`. |
 | "Couldn't load your account" | Run `firebase deploy --only firestore` (Step 2.3). |
+| Photo upload says "isn't set up yet" | Add the 3 Cloudinary variables (Step 6) and redeploy. |
+| PDFs don't open | Cloudinary → Settings → Security → allow delivery of PDF and ZIP files. |
+| Notifications: "Not set up yet" | Paste the VAPID key in `public/firebase-config.js` (Step 7) and push. |
+| Reactions or photos fail to send | Run `firebase deploy --only firestore`, because the rules changed in this update. |
 | The code email doesn't arrive | Check the **Spam** folder. If you set up a custom domain in Brevo later, emails will land in the inbox more reliably. |
 
 You can see the server errors in Vercel → your project → **Logs**.
@@ -116,6 +166,13 @@ kaburlu/
 
 - **Android (Chrome):** an **Install** banner appears in the chat list. Tap it, and Kaburlu gets its own icon on the home screen and opens full-screen.
 - **iPhone:** tap Install to see the steps (Safari → Share → Add to Home Screen).
+
+**Themes, ticks, reactions**
+
+- **Appearance:** ⚙️ Settings → Appearance. Choose Auto, Light or Dark, 5 colors and 4 chat wallpapers. Your choice is saved to your account.
+- **Ticks:** 🕓 sending, ✓ sent, blue ✓✓ seen.
+- **Reactions:** double-click (computer) or long-press (phone) a message to react ❤️😂👍😮😢🙏. Tap your reaction again to remove it.
+- **Emoji:** tap 😊 in the message box for the emoji picker.
 
 **Rename contacts**
 
